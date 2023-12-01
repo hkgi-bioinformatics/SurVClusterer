@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <stdexcept>
 #include <mutex>
+#include <map>
 
 #include "htslib/vcf.h"
 #include "htslib/kseq.h"
@@ -19,6 +20,7 @@ std::mutex mtx;
 const std::string VERSION = "1.0";
 
 std::unordered_map<std::string, int> sample2id;
+std::unordered_map<int, std::string> id2sample;
 std::vector<std::string> sample_names;
 chr_seqs_map_t chr_seqs;
 
@@ -287,6 +289,10 @@ void print_cliques(std::vector<std::vector<int>>& cliques, std::vector<sv_t>& sv
 		std::vector<std::string> sizes_str(n_samples);
 		std::vector<std::string> prec_str(n_samples);
 		std::vector<std::string> incomplete_ass_str(n_samples);
+		// storing sv cn,cnq and caller information
+		std::vector<std::string> cn_str(n_samples);
+		std::vector<std::string> cnq_str(n_samples);
+		std::vector<std::string> caller_str(n_samples);
 		for (sv_t& sv : clique_svs) {
 			if (!coos_str[sample2id[sv.sample]].empty()) {
 				coos_str[sample2id[sv.sample]] += ",";
@@ -298,23 +304,64 @@ void print_cliques(std::vector<std::vector<int>>& cliques, std::vector<sv_t>& sv
 			sizes_str[sample2id[sv.sample]] += std::to_string(sv.len());
 			prec_str[sample2id[sv.sample]] += (sv.precise ? "P" : "I");
 			incomplete_ass_str[sample2id[sv.sample]] += (sv.incomplete_ass ? "T" : "F");
+
+			// . for empty column
+			if(sv.cn.empty()) {
+				cn_str[sample2id[sv.sample]] = ".";
+			} else {
+				cn_str[sample2id[sv.sample]] += sv.cn;
+			}
+
+			if(sv.cnq.empty()) {
+				cnq_str[sample2id[sv.sample]] = ".";
+			} else {
+				cnq_str[sample2id[sv.sample]] += sv.cnq;
+			}
+
+			if(sv.caller.empty()) {
+				caller_str[sample2id[sv.sample]] = ".";
+			} else {
+				caller_str[sample2id[sv.sample]] += sv.caller;
+			}
 		}
+		std::string cn = "";
+		std::string cnq = "";
+		std::string caller = "";
+		std::string sample_order = "";
+		std::vector<std::string> sample_order_str(n_samples);
 		for (int i = 0; i < n_samples; i++) {
 			if (coos_str[i].empty()) {
 				coos_str[i] = ".";
 				sizes_str[i] = ".";
 				prec_str[i] = ".";
 				incomplete_ass_str[i] = ".";
+				cn_str[i] = ".";
+				cnq_str[i] = ".";
+				caller_str[i] = ".";
 			}
+			// the the sample in order since Nirvana removed the order 
+			sample_order_str[i] = id2sample[i];
 			coos[i] = coos_str[i].c_str();
 			sizes[i] = sizes_str[i].c_str();
 			prec[i] = prec_str[i].c_str();
 			incomplete_ass[i] = incomplete_ass_str[i].c_str();
+			cn += cn_str[i] + ",";
+			cnq += cnq_str[i] + ",";
+			caller += caller_str[i] + ",";
+			sample_order += sample_order_str[i] + ",";
 		}
+		cn.pop_back();
+		cnq.pop_back();
+		caller.pop_back();
+		sample_order.pop_back();
 		bcf_update_format_string(out_hdr, vcf_sv, "CO", coos, n_samples);
 		bcf_update_format_string(out_hdr, vcf_sv, "LN", sizes, n_samples);
 		bcf_update_format_string(out_hdr, vcf_sv, "IP", prec, n_samples);
 		bcf_update_format_string(out_hdr, vcf_sv, "IC", incomplete_ass, n_samples);
+		bcf_update_info_string(out_hdr, vcf_sv, "COPY_NUM_GENOTYPE", cn.c_str());
+		bcf_update_info_string(out_hdr, vcf_sv, "COPY_NUM_GENOTYPE_QUALITY", cnq.c_str());
+		bcf_update_info_string(out_hdr, vcf_sv, "CALLER", caller.c_str());
+		bcf_update_info_string(out_hdr, vcf_sv, "SAMPLE_ORDER", sample_order.c_str());
 
 		append_svs.push_back(bcf_dup(vcf_sv));
 
@@ -397,6 +444,18 @@ bcf_hdr_t* generate_vcf_header(std::string command, std::unordered_set<std::stri
 	const char* incomplete_ass_tag = "##INFO=<ID=INCOMPLETE_ASSEMBLY,Number=0,Type=Flag,Description=\"Inserted sequence is too long and only part of it could be assembled.\">";
 	bcf_hdr_add_hrec(out_hdr, bcf_hdr_parse_line(out_hdr, incomplete_ass_tag, &len));
 
+	const char* copynumber_genotype_tag = "##INFO=<ID=COPY_NUM_GENOTYPE,Number=1,Type=String,Description=\"Copy number genotype for imprecise events in CSV format.\">";
+	bcf_hdr_add_hrec(out_hdr, bcf_hdr_parse_line(out_hdr, copynumber_genotype_tag, &len));
+
+	const char* copynumber_genotype_qual_tag = "##INFO=<ID=COPY_NUM_GENOTYPE_QUALITY,Number=1,Type=String,Description=\"Copy number genotype quality for imprecise events in CSV format.\">";
+	bcf_hdr_add_hrec(out_hdr, bcf_hdr_parse_line(out_hdr, copynumber_genotype_qual_tag, &len));
+
+	const char* caller_tag = "##INFO=<ID=CALLER,Number=1,Type=String,Description=\"The chosen caller in CSV format\">";
+	bcf_hdr_add_hrec(out_hdr, bcf_hdr_parse_line(out_hdr, caller_tag, &len));
+
+	const char* sample_order_tag = "##INFO=<ID=SAMPLE_ORDER,Number=1,Type=String,Description=\"The order for CN, CNQ and CALLER\">";
+	bcf_hdr_add_hrec(out_hdr, bcf_hdr_parse_line(out_hdr, sample_order_tag, &len));
+
 	// add FORMAT tags
 	const char* gt_tag = "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">";
 	bcf_hdr_add_hrec(out_hdr, bcf_hdr_parse_line(out_hdr, gt_tag, &len));
@@ -440,6 +499,7 @@ bcf_hdr_t* generate_vcf_header(std::string command, std::unordered_set<std::stri
 
 	int i = 0;
 	for (std::string& sample_name : sample_names) {
+		id2sample[i] = sample_name;
 		sample2id[sample_name] = i++; // bcf_hdr_nsamples(out_hdr) does not work unless we sync the header
 		bcf_hdr_add_sample(out_hdr, sample_name.c_str());
 	}

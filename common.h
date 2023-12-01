@@ -2,6 +2,8 @@
 #define SVCOMPARE_COMMON_H
 
 #include <unistd.h>
+#include <iomanip>
+#include <sstream>
 #include "htslib/vcf.h"
 #include "libs/kseq.h"
 KSEQ_INIT(int, read)
@@ -124,7 +126,7 @@ struct chr_seqs_map_t {
 };
 
 struct sv_t {
-    std::string id, chr, type, ins_seq, sample;
+    std::string id, chr, type, ins_seq, sample, caller, cn, cnq;
     int start, end;
     int _len = 0;
     bool precise, incomplete_ass;
@@ -146,6 +148,31 @@ struct sv_t {
     	incomplete_ass = false;
     	if (bcf_get_info_flag(hdr, vcf_sv, "IMPRECISE", NULL, 0) == 1) precise = false;
     	if (bcf_get_info_flag(hdr, vcf_sv, "INCOMPLETE_ASSEMBLY", NULL, 0) == 1) incomplete_ass = true;
+
+        // add caller information
+        char* caller_data = NULL;
+	    int size = 0;
+        bcf_get_info_string(hdr, vcf_sv, "CALLER", &caller_data, &size);
+        if ((caller_data != NULL) && (caller_data[0] != '\0')) {
+            caller = caller_data;
+        }
+
+        // add C information
+        int* cn_data = NULL;
+        size = 0;
+	    bcf_get_format_int32(hdr, vcf_sv, "CN", &cn_data, &size);
+        if (cn_data != NULL) {
+            cn = std::to_string(cn_data[0]);
+        }
+
+        int float_size = 0;
+        float *cnq_data = NULL;
+        bcf_get_format_float(hdr, vcf_sv, "CNQ", &cnq_data, &float_size);
+        if (cnq_data != NULL) {
+            std::stringstream stream;
+            stream << std::setprecision(2) << std::noshowpoint << cnq_data[0];
+            cnq = stream.str();
+        }
     }
 
     int len() {
